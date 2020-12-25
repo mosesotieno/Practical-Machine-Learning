@@ -1,0 +1,214 @@
+---
+title: "Peer Graded"
+author: "Moses Otieno"
+date: "18/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, include=FALSE}
+library(skimr)
+library(janitor)
+library(caret)
+library(fscaret)
+library(rattle)
+library(randomForest)
+library(e1071)
+library(rpart)
+library(tidyverse)
+
+```
+
+## Introduction
+One thing that people regularly do is quantify how  much of a particular activity they do, but they rarely quantify how well they do it. In this project, my goal will be to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants to predict the manner in which the participants did the exercise. I  will describe how the model was built, how the cross validation was used, the expected sample error and the reasons the choices made were actually made.  
+The outcome variable in the dataset is __classe__.
+
+```{r dataimport, message=FALSE, cache=TRUE, warning=F}
+urltrain <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urltest <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+#Check if the files have been downloaded. If not then download if yes load them
+
+
+if(!file.exists("data/train.csv")){
+download.file(urltrain, destfile = "data/train.csv")
+} else{
+  pml_training <- read_csv("data/train.csv")
+
+}
+
+
+if(!file.exists("data/test.csv")){
+download.file(urltest, destfile = "data/test.csv")
+} else{
+  pml_testing <- read_csv("data/test.csv")
+
+}
+
+
+```
+
+
+## Data management and preparation
+
+
+```{r dmanagement, warning=F}
+#glimpse(pml_training)
+
+# Remove completely missing variables 
+pml_train_clean <- remove_empty(pml_training, "cols")
+
+# Remove variables that are missing 97% of the time 
+
+varmiss <- as_vector(skim(pml_train_clean) %>% 
+  filter(complete_rate < 0.03) %>% 
+  select(skim_variable))
+
+
+
+pml_train_clean <- pml_train_clean %>% 
+  select(!all_of(varmiss))
+
+# Summary of the data
+
+#summary(pml_train_clean)
+
+# # Variable conversion 
+# pml_train_clean %>% 
+#   select_if(is.character)
+
+  
+# Convert classe to factor 
+
+pml_train_clean <- pml_train_clean %>% 
+  mutate(classe = as_factor(classe))
+
+pml_testing_clean <- remove_empty(pml_testing, "cols") %>% 
+  select(!any_of(varmiss)) 
+
+
+# Remove the identification variables
+pml_train_clean <- pml_train_clean %>% 
+  select(-c(1:5))
+
+
+# Remove the variables with same values in the entire dataset(near zero variance)
+
+narz <- nearZeroVar(pml_train_clean)
+pml_train_clean <- pml_train_clean[, -narz]
+
+
+```
+
+
+## Splitting the Data
+
+We split the dataset into training and validation set in the ratio 7:3.
+```{r splitdata, warning=F}
+# Set seed 
+
+set.seed(22122020)
+
+inTrain <- createDataPartition(pml_train_clean$classe, p=0.7, list = F)
+TrainingSet <- pml_train_clean[inTrain, ]
+TestingSet <- pml_train_clean[-inTrain, ]
+
+
+# A simple bar plot of classe variable
+
+ggplot(TrainingSet, aes(classe)) + 
+  geom_bar() +
+  labs(title = "Distribution of classe") +
+  theme_bw()
+
+
+```
+
+Our training set consists of `r nrow(TrainingSet)` rows and `r ncol(TrainingSet)` features while the testing set consists of `r nrow(TestingSet)` rows and `r ncol(TestingSet)` features.
+
+
+## Model Building 
+
+We will fit two models and compare between the two the best model based on predictive accuracy. The models to be fit are  
+
+- Decision Tree Model  
+- Random Forest Model
+
+
+### Decision Tree Model
+
+```{r decisiont}
+
+# fit the model
+set.seed(22122020)
+fitControl <- trainControl(method="cv", number=10)
+
+fit_tree <- train(classe ~ ., data = TrainingSet, method="rpart", 
+                  trControl = fitControl)
+
+# fancy R Plot
+fancyRpartPlot(fit_tree$finalModel)
+# prediction
+predict_fit_tree <- predict(fit_tree, newdata = TestingSet, method="rpart")
+
+#Confusion matrix
+
+cmatrix <- confusionMatrix(predict_fit_tree,TestingSet$classe)
+cmatrix
+```
+
+The predictive accuracy of decision tree model is   `r round(cmatrix[["overall"]][["Accuracy"]]*100, 2)`% 
+
+
+### Random Forest Model
+
+```{r rforest, cache=T}
+# fit the model
+set.seed(22122020)
+
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+
+fit_RF <- train(classe ~ ., data=TrainingSet, method="rf",
+                          trControl=controlRF)
+
+# Prediction
+
+predict_RF <- predict(fit_RF, newdata = TestingSet)
+
+# Confusion matrix
+
+cmatrix_RF <- confusionMatrix(predict_RF, TestingSet$classe)
+cmatrix_RF
+
+```
+
+<!-- The predictive accuracy of random forest model is  `r round(cmatrix_RF[["overall"]][["Accuracy"]]*100, 2)`%. Clearly, the random forest model is better model than the decision tree model.  -->
+
+## Inspect Cross Validation and Out of Sample Error 
+
+Mean accuracy of decision tree model is `r round(mean(fit_tree[["resample"]][["Accuracy"]]), 2)` and the standard deviation is 
+`r round(sd(fit_tree[["resample"]][["Accuracy"]]), 2)`.  
+
+Mean accuracy of random forest model is `r round(mean(fit_RF[["resample"]][["Accuracy"]]), 2)` and the standard deviation is 
+`r round(sd(fit_RF[["resample"]][["Accuracy"]]), 2)`.  
+
+The out of sample error of decision tree model is `r round(1 - mean(fit_tree[["resample"]][["Accuracy"]]), 2)` while that for the random forest model is 
+ `r round(1 - mean(fit_RF[["resample"]][["Accuracy"]]), 2)`.   
+ 
+ Since the random forest proves to do a better job than the decision tree model, we use it in our prediction. 
+ 
+## Best Pedictive Model to test data
+
+```{r bestmodel}
+predict_test <- tibble(predict(fit_RF, newdata = pml_testing))
+predict_test
+
+
+cat("Predictions: ", paste(predict(fit_RF, newdata = pml_testing)))
+```
+
+
+
